@@ -1,0 +1,21 @@
+# Severities that block the merge.
+fail_on: [CRITICAL, HIGH]
+# true = let the PR pass when the review itself could not run (API down, no key).
+fail_open_on_error: false
+# Larger diffs are not truncated; they fail with a "too large" finding.
+max_diff_chars: 150000
+# Cheapest model. For deeper reviews: model: claude-opus-5-5, effort: high, fallbacks: default
+model: claude-haiku-4-5
+# effort and fallbacks are not supported on Haiku; leave them null.
+effort: null
+fallbacks: null
+# Files left out of the reviewed diff (fnmatch patterns on the file path).
+excluded_patterns:
+  - "*.lock"
+  - "*lock.json"
+  - "*.min.js"
+  - "*.png"
+  - "*.jpg"
+  - "*.gif"
+  - "*.pdf"
+  - "dist/*"
