@@ -1,0 +1,49 @@
+name: release-python
+
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: Ref of vladpetl-dev/ci-workflows to take the release tooling from.
+        type: string
+        default: v1
+      python-version:
+        type: string
+        default: "3.12"
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: vladpetl-dev/ci-workflows
+          ref: ${{ inputs.tools-ref }}
+          path: .ci-tools
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+      - id: version
+        # Runs in the caller checkout, so the caller's tags decide the version.
+        run: |
+          tag=$(python .ci-tools/scripts/next_version.py --notes-out "$RUNNER_TEMP/notes.md")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - if: steps.version.outputs.tag != ''
+        run: |
+          rm -rf .ci-tools
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+      - if: steps.version.outputs.tag != ''
+        run: pip install build && python -m build
+      - if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" dist/* \
+            --title "${{ steps.version.outputs.tag }}" --notes-file "$RUNNER_TEMP/notes.md"

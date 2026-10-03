@@ -1,0 +1,96 @@
+name: ai-review
+
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: Ref of vladpetl-dev/ci-workflows to take the review code from. Keep equal to the @ref you call.
+        type: string
+        default: v1
+      python-version:
+        type: string
+        default: "3.12"
+      policy-path:
+        description: Optional policy override in the caller repo, read from the base branch.
+        type: string
+        default: .ai-review/policy.yml
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # Pull request code: diff source only, never executed.
+      - uses: actions/checkout@v4
+        with:
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+      # Review code from the central repo, so a PR cannot change its own review.
+      - uses: actions/checkout@v4
+        with:
+          repository: vladpetl-dev/ci-workflows
+          ref: ${{ inputs.tools-ref }}
+          path: tools
+          persist-credentials: false
+      # Base branch of the caller: optional policy override.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+      - run: pip install ./tools
+
+      - name: Resolve policy
+        id: policy
+        run: |
+          if [ -f "base/${{ inputs.policy-path }}" ]; then
+            echo "path=base/${{ inputs.policy-path }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=tools/review/policy.yml" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Claude review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: >
+          python -m review.review --repo pr
+          --base "origin/${{ github.base_ref }}" --head HEAD
+          --policy "${{ steps.policy.outputs.path }}"
+          --out review-output/findings.json
+
+      - name: Report
+        if: always()
+        run: >
+          python -m review.report review-output/findings.json
+          --policy "${{ steps.policy.outputs.path }}" --out review-output/report.md
+
+      - name: Comment on PR
+        # Fork PRs get a read-only token and no secrets.
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" \
+            --body-file review-output/report.md --edit-last --create-if-none
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-review-report
+          path: review-output/
+
+      - name: Gate
+        id: gate
+        run: python -m review.gate review-output/findings.json --policy "${{ steps.policy.outputs.path }}"
+
+      - name: Slack notification
+        if: failure() && steps.gate.outcome == 'failure'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then echo "Slack not configured, skipping"; exit 0; fi
+          curl -sS -X POST -H 'Content-Type: application/json' "$SLACK_WEBHOOK_URL" \
+            -d "{\"text\":\"AI review FAILED: ${{ github.event.pull_request.html_url }}\"}"
