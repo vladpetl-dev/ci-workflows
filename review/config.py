@@ -14,6 +14,8 @@ DEFAULTS = {
     "effort": None,
     "fallbacks": None,
     "excluded_patterns": [],
+    # Findings below this severity are dropped from the report and the gate.
+    "min_severity": "INFO",
 }
 
 
@@ -27,6 +29,9 @@ def load_policy(path: str | Path) -> dict:
     unknown = [s for s in policy["fail_on"] if s not in SEVERITIES]
     if unknown:
         raise ValueError(f"unknown severities in fail_on: {unknown}; allowed: {SEVERITIES}")
+    policy["min_severity"] = str(policy["min_severity"]).upper()
+    if policy["min_severity"] not in SEVERITIES:
+        raise ValueError(f"unknown min_severity: {policy['min_severity']}; allowed: {SEVERITIES}")
     policy["fail_open_on_error"] = bool(policy["fail_open_on_error"])
     policy["max_diff_chars"] = int(policy["max_diff_chars"])
     return policy

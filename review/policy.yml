@@ -1,3 +1,5 @@
+# Findings below this severity are not reported (cuts run-to-run noise). INFO = report all.
+min_severity: LOW
 # Severities that block the merge.
 fail_on: [CRITICAL, HIGH]
 # true = let the PR pass when the review itself could not run (API down, no key).

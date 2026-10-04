@@ -72,9 +72,17 @@ jobs:
         if: always() && github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        # Upsert by marker: --edit-last would overwrite another workflow's comment from the same bot.
         run: |
-          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" \
-            --body-file review-output/report.md --edit-last --create-if-none
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | contains("<!-- ai-review-gate -->")) | .id' | tail -n1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@review-output/report.md > /dev/null
+          else
+            gh pr comment "$PR" --repo "$REPO" --body-file review-output/report.md
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()

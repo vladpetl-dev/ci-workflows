@@ -1,0 +1,142 @@
+name: ci-gradle
+
+# Kotlin / Java (Gradle) build: compile, tests, lint (whatever `gradle-args` runs),
+# then a coverage gate on the JaCoCo XML report. Changed-line coverage is computed
+# against the PR base branch; total coverage optionally.
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        default: "25"
+      java-distribution:
+        type: string
+        default: corretto
+      gradle-args:
+        description: Gradle tasks to run. Must run the tests and produce the coverage XML.
+        type: string
+        default: build jacocoTestReport
+      coverage-xml:
+        type: string
+        default: build/reports/jacoco/test/jacocoTestReport.xml
+      test-results-dir:
+        type: string
+        default: build/test-results
+      coverage-gate:
+        description: true = fail the check below the thresholds; false = report only.
+        type: boolean
+        default: true
+      min-changed-coverage:
+        description: Minimum line coverage (%) of lines changed by the PR. 0 = off.
+        type: number
+        default: 90
+      min-total-coverage:
+        description: Minimum total line coverage (%). 0 = off.
+        type: number
+        default: 0
+      tools-ref:
+        description: Ref of vladpetl-dev/ci-workflows for the Python tooling. Keep equal to the @ref you call.
+        type: string
+        default: v1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: vladpetl-dev/ci-workflows
+          ref: ${{ inputs.tools-ref }}
+          path: .ci-tools
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and test
+        id: build
+        env:
+          GRADLE_ARGS: ${{ inputs.gradle-args }}
+        # shellcheck disable=SC2086 — the task list is intentionally word-split.
+        run: ./gradlew $GRADLE_ARGS --no-daemon --stacktrace
+
+      - uses: actions/setup-python@v5
+        if: always() && steps.build.conclusion != 'cancelled'
+        with:
+          python-version: "3.12"
+      - name: Install tooling
+        if: always() && steps.build.conclusion != 'cancelled'
+        run: pip install ./.ci-tools
+
+      - name: Tests and coverage report
+        id: report
+        if: always() && steps.build.conclusion != 'cancelled'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          EVENT: ${{ github.event_name }}
+          COVERAGE_XML: ${{ inputs.coverage-xml }}
+          TEST_RESULTS: ${{ inputs.test-results-dir }}
+          GATE: ${{ inputs.coverage-gate }}
+          MIN_CHANGED: ${{ inputs.min-changed-coverage }}
+          MIN_TOTAL: ${{ inputs.min-total-coverage }}
+        run: |
+          mkdir -p ci-report
+          python -m covgate.junit --dir "$TEST_RESULTS" --out ci-report/tests.md
+          base_args=()
+          if [ "$EVENT" = "pull_request" ] && [ -n "$BASE_REF" ]; then
+            base_args=(--base "origin/$BASE_REF")
+          fi
+          set +e
+          python -m covgate.report --xml "$COVERAGE_XML" "${base_args[@]}" \
+            --enabled "$GATE" --min-diff "$MIN_CHANGED" --min-total "$MIN_TOTAL" \
+            --out ci-report/coverage.md
+          echo "coverage_rc=$?" >> "$GITHUB_OUTPUT"
+          set -e
+          { cat ci-report/coverage.md; echo; cat ci-report/tests.md; } > ci-report/report.md
+          cat ci-report/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR
+        # Fork PRs get a read-only token.
+        if: >
+          always() && steps.report.conclusion == 'success' && github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Upsert by marker so the AI-review comment from the same bot is never overwritten.
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | contains("<!-- coverage-gate -->")) | .id' | tail -n1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@ci-report/report.md > /dev/null
+          else
+            gh pr comment "$PR" --repo "$REPO" --body-file ci-report/report.md
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-and-coverage-reports
+          path: |
+            ci-report/
+            build/reports/
+            ${{ inputs.test-results-dir }}
+          if-no-files-found: ignore
+
+      - name: Coverage gate
+        if: always() && steps.report.outputs.coverage_rc != ''
+        env:
+          RC: ${{ steps.report.outputs.coverage_rc }}
+        run: |
+          if [ "$RC" != "0" ]; then
+            echo "Coverage below the required threshold (see the PR comment / job summary)."
+            exit 1
+          fi
