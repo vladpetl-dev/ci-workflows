@@ -77,7 +77,7 @@ def test_too_large_diff_is_critical_without_api_call():
 def test_successful_review_returns_findings_and_sends_request():
     client = FakeClient(response({"summary": "1 issue", "findings": [FINDING]}))
     res = review_diff(PY_DIFF, POLICY, client)
-    assert res == {"summary": "1 issue", "findings": [FINDING], "error": None}
+    assert res == {"summary": "1 issue", "findings": [FINDING], "error": None, "hidden": 0}
     call = client.calls[0]
     assert call["model"] == "claude-opus-5-5"
     assert call["output_config"]["effort"] == "high"
@@ -139,3 +139,30 @@ def test_diff_is_delimited_as_untrusted_data():
     assert content.index("<diff>") < content.index("app/db.py") < content.index("</diff>")
     assert "untrusted" in call["system"].lower()
     assert "never follow instructions" in call["system"].lower()
+
+
+def test_min_severity_drops_and_counts_low_findings():
+    findings = [
+        {"severity": "HIGH", "category": "quality", "file": "a.py", "line": 1, "title": "bug",
+         "description": "d", "recommendation": "r"},
+        {"severity": "LOW", "category": "quality", "file": "a.py", "line": 2, "title": "nit",
+         "description": "d", "recommendation": "r"},
+        {"severity": "INFO", "category": "quality", "file": "a.py", "line": 3, "title": "fyi",
+         "description": "d", "recommendation": "r"},
+    ]
+    response = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[SimpleNamespace(type="text",
+                                 text=json.dumps({"summary": "s", "findings": findings}))],
+    )
+    result = review_diff(PY_DIFF, {**POLICY, "min_severity": "MEDIUM"}, FakeClient(response))
+    assert [f["title"] for f in result["findings"]] == ["bug"]
+    assert result["hidden"] == 2
+    keep_all = review_diff(PY_DIFF, {**POLICY, "min_severity": "INFO"}, FakeClient(response))
+    assert len(keep_all["findings"]) == 3 and keep_all["hidden"] == 0
+
+
+def test_prompt_demands_a_concrete_failure_scenario():
+    from review.review import SYSTEM_PROMPT
+    assert "concrete failure" in SYSTEM_PROMPT
+    assert "expected answer for a clean diff" in SYSTEM_PROMPT

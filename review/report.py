@@ -24,9 +24,13 @@ def render(result: dict, passed: bool, verdict: str) -> str:
         lines += [result["summary"], ""]
 
     findings = sorted(result["findings"], key=lambda x: ORDER.index(x["severity"].upper()))
+    hidden = result.get("hidden", 0)
+    note = ""
+    if hidden:
+        note = f"\n_{hidden} lower-severity finding(s) hidden by policy `min_severity`._\n"
     if not findings:
         lines.append("No findings.")
-        return "\n".join(lines) + "\n"
+        return "\n".join(lines) + "\n" + note
 
     lines += ["| Severity | Category | Location | Finding | Recommendation |",
               "|---|---|---|---|---|"]
@@ -35,7 +39,7 @@ def render(result: dict, passed: bool, verdict: str) -> str:
         finding = f"**{_cell(item['title'])}**<br>{_cell(item['description'])}"
         lines.append(f"| {item['severity']} | {item['category']} | `{location}` | "
                      f"{finding} | {_cell(item['recommendation'])} |")
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n" + note
 
 
 def main(argv: list[str] | None = None) -> int:

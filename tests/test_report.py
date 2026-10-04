@@ -33,3 +33,8 @@ def test_error_is_shown():
 def test_pipe_in_text_does_not_break_table():
     res = {"summary": "s", "findings": [f("HIGH", "a | b")], "error": None}
     assert "a \\| b" in render(res, False, "FAIL")
+
+
+def test_hidden_findings_are_counted():
+    md = render({"summary": "s", "findings": [], "error": None, "hidden": 3}, True, "PASS")
+    assert "3 lower-severity finding(s) hidden" in md
