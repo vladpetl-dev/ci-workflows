@@ -10,6 +10,7 @@ check into a blocked merge.
 | Backend build, tests, coverage | `ci-gradle.yml` | the build fails, or coverage of PR-changed lines < **95%** (total coverage optional) |
 | Frontend build, tests, coverage | `ci-node.yml` | lint, typecheck, tests or build fail, or changed-line coverage < **95%** |
 | Vulnerability scan (Trivy) | `security.yml` | any **HIGH or CRITICAL** vulnerability, fixed or not, unless accepted in `.trivyignore` |
+| Pull request size | `pr-size.yml` | the PR adds more than **1500 lines of code** (deleted lines and files, unchanged renames, blank and comment-only lines, docs and lock files do not count); `enabled: false` = report only |
 | Release | `release.yml` | — (runs after CI passes on the default branch: tag `vX.Y.Z` + GitHub release) |
 | Dependency updates | Renovate preset `default.json` | — (Renovate PRs pass through the same gates) |
 
@@ -47,6 +48,21 @@ jobs:
   Test results in JUnit XML under `test-results/` are optional.
 - **Coverage comments:** each report posts and updates its own PR comment. Changed lines count only when the
   coverage report knows them as executable code, so tests, docs and config never dilute the number.
+
+Add the size gate to the same `ci.yml`:
+
+```yaml
+  size:
+    uses: vladpetl-dev/ci-workflows/.github/workflows/pr-size.yml@v2
+    with:
+      max-lines: 1500     # default
+      enabled: true       # false = report only
+      exclude: ""         # extra fnmatch patterns, e.g. "src/generated/*"
+```
+
+What counts: lines the PR adds in code files. A deleted class costs nothing, and so does an unchanged move.
+A change that only edits comments costs nothing either: comment lines are recognised by file type
+(`//`, `/* */`, `*`, `#`, `--`, `<!-- -->`). Tests count, since they are code too.
 
 `.github/workflows/security.yml`:
 
@@ -151,7 +167,7 @@ A failed check blocks a merge only when the branch requires it. After the workfl
 the checks exist), run:
 
 ```bash
-scripts/protect-branch.sh vladpetl-dev/<repo> "backend / build" "frontend / build" "security / trivy" "ai-review / review"
+scripts/protect-branch.sh vladpetl-dev/<repo> "backend / build" "frontend / build" "size / size" "security / trivy" "ai-review / review"
 ```
 
 The script creates or updates the ruleset `default-branch-protection` on the default branch:
@@ -195,6 +211,9 @@ Organization secrets shared with selected repositories (passed with `secrets: in
 | `security` | `image-ref` | `""` | Image to scan |
 | `security` | `upload-sarif` | `true` | Needs `security-events: write`; not a gate |
 | `release` | `java-version`, `node-version`, `build-command`, `assets` | empty | Optional build and files to attach |
+| `pr-size` | `max-lines` | `1500` | Added lines of code |
+| `pr-size` | `enabled` | `true` | `false` = report only |
+| `pr-size` | `exclude` | `""` | Extra patterns on top of `*.md`, `docs/*`, lock files, wrappers, images |
 
 ## Review policy and stance
 

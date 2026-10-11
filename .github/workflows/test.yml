@@ -51,3 +51,11 @@ jobs:
       # Review code from main, so a pull request cannot weaken its own review.
       tools-ref: main
     secrets: inherit
+
+  size:
+    uses: ./.github/workflows/pr-size.yml
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      tools-ref: ${{ github.head_ref || github.ref_name }}
