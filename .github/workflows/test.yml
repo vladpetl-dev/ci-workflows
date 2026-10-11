@@ -12,11 +12,42 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: pytest -q
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
+
+  # This repository's own gates, through its own reusable workflows.
+  security:
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      # The scanner tooling of the change itself: this repo trusts its own branches.
+      tools-ref: ${{ github.head_ref || github.ref_name }}
+
+  ai-review:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/ai-review.yml
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      # Review code from main, so a pull request cannot weaken its own review.
+      tools-ref: main
+    secrets: inherit

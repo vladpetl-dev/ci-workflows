@@ -1,0 +1,172 @@
+name: ci-node
+
+# Frontend (Node) build: install, lint, typecheck, tests with coverage, build; then the same
+# coverage gate as the backend on a Cobertura XML report (Vitest/Jest `cobertura` reporter).
+# Below the threshold the check fails, so a ruleset blocks the merge.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory with package.json and package-lock.json.
+        type: string
+        default: frontend
+      node-version:
+        type: string
+        default: "26"
+      lint-script:
+        description: npm script for lint; empty = skip.
+        type: string
+        default: lint
+      typecheck-script:
+        description: npm script for type checking; empty = skip.
+        type: string
+        default: typecheck
+      test-script:
+        description: npm script that runs the tests and writes the Cobertura report.
+        type: string
+        default: test:coverage
+      build-script:
+        description: npm script for the production build; empty = skip.
+        type: string
+        default: build
+      coverage-xml:
+        description: Path relative to working-directory.
+        type: string
+        default: coverage/cobertura-coverage.xml
+      junit-dir:
+        description: Directory (relative to working-directory) with JUnit XML test results; optional.
+        type: string
+        default: test-results
+      coverage-gate:
+        type: boolean
+        default: true
+      min-changed-coverage:
+        type: number
+        default: 95
+      min-total-coverage:
+        type: number
+        default: 0
+      report-label:
+        type: string
+        default: frontend
+      tools-ref:
+        type: string
+        default: v2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: vladpetl-dev/ci-workflows
+          ref: ${{ inputs.tools-ref }}
+          path: .ci-tools
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install
+        working-directory: ${{ inputs.working-directory }}
+        run: npm ci
+      - name: Lint
+        if: inputs.lint-script != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: npm run "${{ inputs.lint-script }}"
+      - name: Typecheck
+        if: inputs.typecheck-script != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: npm run "${{ inputs.typecheck-script }}"
+      - name: Tests with coverage
+        id: build
+        working-directory: ${{ inputs.working-directory }}
+        run: npm run "${{ inputs.test-script }}"
+      - name: Build
+        if: inputs.build-script != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: npm run "${{ inputs.build-script }}"
+
+      - uses: actions/setup-python@v7
+        if: always() && steps.build.conclusion != 'cancelled' && steps.build.conclusion != 'skipped'
+        with:
+          python-version: "3.12"
+      - name: Install tooling
+        if: always() && steps.build.conclusion != 'cancelled' && steps.build.conclusion != 'skipped'
+        run: pip install ./.ci-tools
+
+      - name: Tests and coverage report
+        id: report
+        if: always() && steps.build.conclusion != 'cancelled' && steps.build.conclusion != 'skipped'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          EVENT: ${{ github.event_name }}
+          WORKDIR: ${{ inputs.working-directory }}
+          COVERAGE_XML: ${{ inputs.coverage-xml }}
+          JUNIT_DIR: ${{ inputs.junit-dir }}
+          GATE: ${{ inputs.coverage-gate }}
+          MIN_CHANGED: ${{ inputs.min-changed-coverage }}
+          MIN_TOTAL: ${{ inputs.min-total-coverage }}
+          LABEL: ${{ inputs.report-label }}
+        run: |
+          mkdir -p ci-report
+          : > ci-report/tests.md
+          if [ -d "$WORKDIR/$JUNIT_DIR" ]; then
+            python -m covgate.junit --dir "$WORKDIR/$JUNIT_DIR" --out ci-report/tests.md
+          fi
+          base_args=()
+          if [ "$EVENT" = "pull_request" ] && [ -n "$BASE_REF" ]; then
+            base_args=(--base "origin/$BASE_REF")
+          fi
+          set +e
+          python -m covgate.report --xml "$WORKDIR/$COVERAGE_XML" "${base_args[@]}" \
+            --enabled "$GATE" --min-diff "$MIN_CHANGED" --min-total "$MIN_TOTAL" \
+            --label "$LABEL" --out ci-report/coverage.md
+          echo "coverage_rc=$?" >> "$GITHUB_OUTPUT"
+          set -e
+          { cat ci-report/coverage.md; echo; cat ci-report/tests.md; } > ci-report/report.md
+          cat ci-report/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR
+        if: >
+          always() && steps.report.conclusion == 'success' && github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          MARKER: "<!-- coverage-gate:${{ inputs.report-label }} -->"
+        run: |
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | tail -n1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@ci-report/report.md > /dev/null
+          else
+            gh pr comment "$PR" --repo "$REPO" --body-file ci-report/report.md
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ${{ inputs.report-label }}-test-and-coverage-reports
+          path: |
+            ci-report/
+            ${{ inputs.working-directory }}/coverage/
+          if-no-files-found: ignore
+
+      - name: Coverage gate
+        if: always() && steps.report.outputs.coverage_rc != ''
+        env:
+          RC: ${{ steps.report.outputs.coverage_rc }}
+        run: |
+          if [ "$RC" != "0" ]; then
+            echo "Coverage below the required threshold (see the PR comment / job summary)."
+            exit 1
+          fi

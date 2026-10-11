@@ -1,0 +1,84 @@
+name: release
+
+# A GitHub release for every merge to the default branch whose CI passed. The version comes from
+# Conventional Commits since the last tag (feat → minor, `type!:` / BREAKING CHANGE → major,
+# anything else → patch); notes list the commit subjects. Optional build and assets (jar, dist/).
+# Call it from a `workflow_run` on the caller's CI workflow (see README).
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: Set up this JDK before build-command; empty = none.
+        type: string
+        default: ""
+      node-version:
+        description: Set up this Node before build-command; empty = none.
+        type: string
+        default: ""
+      build-command:
+        description: Shell command that builds the release assets; empty = no build.
+        type: string
+        default: ""
+      assets:
+        description: Space-separated globs of files attached to the release; empty = none.
+        type: string
+        default: ""
+      tools-ref:
+        type: string
+        default: v2
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/checkout@v7
+        with:
+          repository: vladpetl-dev/ci-workflows
+          ref: ${{ inputs.tools-ref }}
+          path: .ci-tools
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - id: version
+        # Runs in the caller checkout, so the caller's tags decide the version.
+        run: |
+          tag=$(python .ci-tools/scripts/next_version.py --notes-out "$RUNNER_TEMP/notes.md")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          rm -rf .ci-tools
+
+      - uses: actions/setup-java@v6
+        if: steps.version.outputs.tag != '' && inputs.java-version != ''
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: corretto
+      - uses: actions/setup-node@v7
+        if: steps.version.outputs.tag != '' && inputs.node-version != ''
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Build assets
+        if: steps.version.outputs.tag != '' && inputs.build-command != ''
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: bash -c "$BUILD_COMMAND"
+
+      - name: Tag and release
+        if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          ASSETS: ${{ inputs.assets }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
+          shopt -s nullglob globstar
+          # The globs are intentionally expanded.
+          # shellcheck disable=SC2206
+          files=($ASSETS)
+          gh release create "$TAG" "${files[@]}" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
