@@ -89,7 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     fail_on = {s.strip().upper() for s in args.fail_on.split(",") if s.strip()}
     missing = [p for p in args.json if not Path(p).exists()]
     if missing:
-        Path(args.out).write_text(f"{MARKER}\n## ❌ Trivy: report missing (`{', '.join(missing)}`)\n")
+        names = ", ".join(missing)
+        Path(args.out).write_text(f"{MARKER}\n## ❌ Trivy: report missing (`{names}`)\n")
         print(f"trivy report missing: {', '.join(missing)}")
         return 1
     vulns = [v for p in args.json for v in parse(Path(p).read_text())]

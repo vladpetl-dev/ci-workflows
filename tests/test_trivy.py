@@ -70,8 +70,9 @@ def test_blocking_report_fails_and_missing_report_fails(tmp_path):
 
 def test_several_reports_are_combined(tmp_path):
     lockfiles = tmp_path / "fs.json"
-    lockfiles.write_text(json.dumps({"Results": [{"Target": "package-lock.json", "Vulnerabilities": [
-        {"VulnerabilityID": "CVE-9", "PkgName": "a", "InstalledVersion": "1", "Severity": "LOW"}]}]}))
+    low = {"VulnerabilityID": "CVE-9", "PkgName": "a", "InstalledVersion": "1", "Severity": "LOW"}
+    lockfiles.write_text(json.dumps(
+        {"Results": [{"Target": "package-lock.json", "Vulnerabilities": [low]}]}))
     jars = tmp_path / "jars.json"
     jars.write_text(json.dumps(REPORT))
     out = tmp_path / "r.md"
