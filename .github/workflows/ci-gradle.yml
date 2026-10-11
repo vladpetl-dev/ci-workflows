@@ -134,10 +134,10 @@ jobs:
           MARKER: "<!-- coverage-gate:${{ inputs.report-label }} -->"
         run: |
           # Upsert by marker so other reports from the same bot are never overwritten.
-          # jq reads the marker from the environment; it is never spliced into the filter.
-          # shellcheck disable=SC2016
+          # Each report starts with its marker line; match it as plain text, outside jq.
           id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq '.[] | select(.body | contains($ENV.MARKER)) | .id' | tail -n1)
+            --jq '.[] | "\(.id)\t\(.body | split("\n")[0])"' \
+            | awk -F'\t' -v marker="$MARKER" '$2 == marker { id = $1 } END { print id }')
           if [ -n "$id" ]; then
             gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@ci-report/report.md > /dev/null
           else

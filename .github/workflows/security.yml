@@ -136,9 +136,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          MARKER: "<!-- trivy-gate -->"
         run: |
+          # Each report starts with its marker line; match it as plain text, outside jq.
           id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq '.[] | select(.body | contains("<!-- trivy-gate -->")) | .id' | tail -n1)
+            --jq '.[] | "\(.id)\t\(.body | split("\n")[0])"' \
+            | awk -F'\t' -v marker="$MARKER" '$2 == marker { id = $1 } END { print id }')
           if [ -n "$id" ]; then
             gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@trivy-report.md > /dev/null
           else
