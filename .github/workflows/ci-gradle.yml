@@ -102,6 +102,11 @@ jobs:
           MIN_TOTAL: ${{ inputs.min-total-coverage }}
           LABEL: ${{ inputs.report-label }}
         run: |
+          # The label names a PR comment marker; keep it to a safe slug.
+          if ! [[ "$LABEL" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]]; then
+            echo "report-label must be a lower-case slug (a-z, 0-9, -): '$LABEL'" >&2
+            exit 1
+          fi
           mkdir -p ci-report
           python -m covgate.junit --dir "$WORKDIR/$TEST_RESULTS" --out ci-report/tests.md
           base_args=()
@@ -129,8 +134,10 @@ jobs:
           MARKER: "<!-- coverage-gate:${{ inputs.report-label }} -->"
         run: |
           # Upsert by marker so other reports from the same bot are never overwritten.
+          # jq reads the marker from the environment; it is never spliced into the filter.
+          # shellcheck disable=SC2016
           id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | tail -n1)
+            --jq '.[] | select(.body | contains($ENV.MARKER)) | .id' | tail -n1)
           if [ -n "$id" ]; then
             gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@ci-report/report.md > /dev/null
           else
