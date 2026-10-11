@@ -208,6 +208,7 @@ Organization secrets shared with selected repositories (passed with `secrets: in
 | `security` | `fail-on` | `HIGH,CRITICAL` | |
 | `security` | `ignore-unfixed` | `false` | |
 | `security` | `gradle-directory`, `gradle-args`, `jar-paths` | `""`, `assemble`, `build/libs` | Gradle build whose jars are scanned |
+| `security` | `skip-dirs` | `""` | Extra directories left out of the repository scan, comma-separated (archived code, fixtures) |
 | `security` | `image-ref` | `""` | Image to scan |
 | `security` | `upload-sarif` | `true` | Needs `security-events: write`; not a gate |
 | `release` | `java-version`, `node-version`, `build-command`, `assets` | empty | Optional build and files to attach |
