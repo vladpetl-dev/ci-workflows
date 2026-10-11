@@ -1,0 +1,63 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Shared Renovate preset for vladpetl-dev repositories. Use: { \"extends\": [\"github>vladpetl-dev/ci-workflows\"] }",
+  "extends": ["config:recommended", ":semanticCommits", ":dependencyDashboard", ":timezone(Europe/London)"],
+  "schedule": ["before 7am on monday"],
+  "prConcurrentLimit": 6,
+  "prHourlyLimit": 3,
+  "labels": ["dependencies"],
+  "platformAutomerge": true,
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": ["at any time"],
+    "labels": ["dependencies", "security"]
+  },
+  "packageRules": [
+    {
+      "description": "Backend: Gradle and Maven non-major updates in one PR",
+      "matchManagers": ["gradle", "gradle-wrapper", "maven"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "backend non-major"
+    },
+    {
+      "description": "Frontend: runtime dependencies, non-major, in one PR (reviewed, not automerged)",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "frontend non-major"
+    },
+    {
+      "description": "Frontend: dev dependencies, non-major, merge themselves once every required check is green",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "frontend dev non-major",
+      "automerge": true
+    },
+    {
+      "description": "Python: non-major updates in one PR",
+      "matchManagers": ["pep621", "pip_requirements", "pip_setup"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "python non-major"
+    },
+    {
+      "description": "GitHub Actions: non-major updates merge themselves once checks pass",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "github actions",
+      "automerge": true
+    },
+    {
+      "description": "Docker images in Dockerfiles and Compose files",
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "groupName": "docker images"
+    },
+    {
+      "description": "Major updates: one PR each, labelled, never automerged",
+      "matchUpdateTypes": ["major"],
+      "labels": ["dependencies", "major"],
+      "automerge": false
+    }
+  ]
+}

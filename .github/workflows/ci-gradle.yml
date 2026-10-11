@@ -1,12 +1,16 @@
 name: ci-gradle
 
-# Kotlin / Java (Gradle) build: compile, tests, lint (whatever `gradle-args` runs),
-# then a coverage gate on the JaCoCo XML report. Changed-line coverage is computed
-# against the PR base branch; total coverage optionally.
+# Kotlin / Java (Gradle) build: compile, tests, lint (whatever `gradle-args` runs), then a coverage
+# gate on the JaCoCo XML report. Changed-line coverage is computed against the PR base branch;
+# total coverage optionally. Below the threshold the check fails, so a ruleset blocks the merge.
 
 on:
   workflow_call:
     inputs:
+      working-directory:
+        description: Directory of the Gradle build (where gradlew is).
+        type: string
+        default: .
       java-version:
         type: string
         default: "25"
@@ -18,9 +22,11 @@ on:
         type: string
         default: build jacocoTestReport
       coverage-xml:
+        description: Path relative to working-directory.
         type: string
         default: build/reports/jacoco/test/jacocoTestReport.xml
       test-results-dir:
+        description: Path relative to working-directory.
         type: string
         default: build/test-results
       coverage-gate:
@@ -30,44 +36,51 @@ on:
       min-changed-coverage:
         description: Minimum line coverage (%) of lines changed by the PR. 0 = off.
         type: number
-        default: 90
+        default: 95
       min-total-coverage:
         description: Minimum total line coverage (%). 0 = off.
         type: number
         default: 0
+      report-label:
+        description: Name of this report in the PR comment (one comment per label).
+        type: string
+        default: backend
       tools-ref:
         description: Ref of vladpetl-dev/ci-workflows for the Python tooling. Keep equal to the @ref you call.
         type: string
-        default: v1
+        default: v2
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: vladpetl-dev/ci-workflows
           ref: ${{ inputs.tools-ref }}
           path: .ci-tools
           persist-credentials: false
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Build and test
         id: build
+        working-directory: ${{ inputs.working-directory }}
         env:
           GRADLE_ARGS: ${{ inputs.gradle-args }}
-        # shellcheck disable=SC2086 — the task list is intentionally word-split.
-        run: ./gradlew $GRADLE_ARGS --no-daemon --stacktrace
+        run: |
+          # The task list is intentionally word-split.
+          # shellcheck disable=SC2086
+          ./gradlew $GRADLE_ARGS --no-daemon --stacktrace
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: always() && steps.build.conclusion != 'cancelled'
         with:
           python-version: "3.12"
@@ -81,22 +94,29 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
           EVENT: ${{ github.event_name }}
+          WORKDIR: ${{ inputs.working-directory }}
           COVERAGE_XML: ${{ inputs.coverage-xml }}
           TEST_RESULTS: ${{ inputs.test-results-dir }}
           GATE: ${{ inputs.coverage-gate }}
           MIN_CHANGED: ${{ inputs.min-changed-coverage }}
           MIN_TOTAL: ${{ inputs.min-total-coverage }}
+          LABEL: ${{ inputs.report-label }}
         run: |
+          # The label names a PR comment marker; keep it to a safe slug.
+          if ! [[ "$LABEL" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]]; then
+            echo "report-label must be a lower-case slug (a-z, 0-9, -): '$LABEL'" >&2
+            exit 1
+          fi
           mkdir -p ci-report
-          python -m covgate.junit --dir "$TEST_RESULTS" --out ci-report/tests.md
+          python -m covgate.junit --dir "$WORKDIR/$TEST_RESULTS" --out ci-report/tests.md
           base_args=()
           if [ "$EVENT" = "pull_request" ] && [ -n "$BASE_REF" ]; then
             base_args=(--base "origin/$BASE_REF")
           fi
           set +e
-          python -m covgate.report --xml "$COVERAGE_XML" "${base_args[@]}" \
+          python -m covgate.report --xml "$WORKDIR/$COVERAGE_XML" "${base_args[@]}" \
             --enabled "$GATE" --min-diff "$MIN_CHANGED" --min-total "$MIN_TOTAL" \
-            --out ci-report/coverage.md
+            --label "$LABEL" --out ci-report/coverage.md
           echo "coverage_rc=$?" >> "$GITHUB_OUTPUT"
           set -e
           { cat ci-report/coverage.md; echo; cat ci-report/tests.md; } > ci-report/report.md
@@ -111,24 +131,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          MARKER: "<!-- coverage-gate:${{ inputs.report-label }} -->"
         run: |
-          # Upsert by marker so the AI-review comment from the same bot is never overwritten.
+          # Upsert by marker so other reports from the same bot are never overwritten.
+          # Each report starts with its marker line; match it as plain text, outside jq.
           id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq '.[] | select(.body | contains("<!-- coverage-gate -->")) | .id' | tail -n1)
+            --jq '.[] | "\(.id)\t\(.body | split("\n")[0])"' \
+            | awk -F'\t' -v marker="$MARKER" '$2 == marker { id = $1 } END { print id }')
           if [ -n "$id" ]; then
             gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@ci-report/report.md > /dev/null
           else
             gh pr comment "$PR" --repo "$REPO" --body-file ci-report/report.md
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: test-and-coverage-reports
+          name: ${{ inputs.report-label }}-test-and-coverage-reports
           path: |
             ci-report/
-            build/reports/
-            ${{ inputs.test-results-dir }}
+            ${{ inputs.working-directory }}/build/reports/
+            ${{ inputs.working-directory }}/${{ inputs.test-results-dir }}
           if-no-files-found: ignore
 
       - name: Coverage gate

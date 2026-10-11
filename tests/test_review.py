@@ -166,3 +166,10 @@ def test_prompt_demands_a_concrete_failure_scenario():
     from review.review import SYSTEM_PROMPT
     assert "concrete failure" in SYSTEM_PROMPT
     assert "expected answer for a clean diff" in SYSTEM_PROMPT
+
+
+def test_prompt_sets_an_independent_adversarial_reviewer():
+    from review.review import SYSTEM_PROMPT
+    assert "independent" in SYSTEM_PROMPT
+    assert "try to break" in SYSTEM_PROMPT
+    assert "Do not trust" in SYSTEM_PROMPT

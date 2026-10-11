@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+# Conventional Commits: `type!:` or `type(scope)!:` or a BREAKING CHANGE note marks a major release.
+BREAKING = re.compile(r"^\w+(\([^)]*\))?!:|BREAKING[ -]CHANGE")
 
 
 def _git(*args: str) -> str:
@@ -24,6 +26,8 @@ def next_version(latest: str | None, subjects: list[str]) -> str:
     if latest is None:
         return "v0.1.0"
     major, minor, patch = map(int, TAG.match(latest).groups())
+    if any(BREAKING.search(s) for s in subjects):
+        return f"v{major + 1}.0.0"
     if any(s.startswith("feat:") or s.startswith("feat(") for s in subjects):
         return f"v{major}.{minor + 1}.0"
     return f"v{major}.{minor}.{patch + 1}"

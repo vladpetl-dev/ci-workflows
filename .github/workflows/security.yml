@@ -1,0 +1,188 @@
+name: security
+
+# Trivy vulnerability scan. Lock files (npm, Gradle lockfiles, Maven, pip…) are scanned in the repo;
+# Gradle builds without lockfiles are built first and their jars scanned (Trivy reads the
+# dependencies inside Spring Boot fat jars); an image can be scanned too. Severities in `fail-on`
+# fail the check, so a ruleset blocks the merge. Accepted risks: `.trivyignore` in the repo root
+# with a reason (Trivy reads it by default when it exists).
+
+on:
+  workflow_call:
+    inputs:
+      fail-on:
+        description: Comma-separated severities that fail the check.
+        type: string
+        default: HIGH,CRITICAL
+      ignore-unfixed:
+        description: true = vulnerabilities without a released fix do not count.
+        type: boolean
+        default: false
+      gradle-directory:
+        description: Directory of a Gradle build to assemble and scan; empty = no Gradle build.
+        type: string
+        default: ""
+      gradle-args:
+        type: string
+        default: assemble
+      jar-paths:
+        description: Directory (relative to gradle-directory) whose jars are scanned.
+        type: string
+        default: build/libs
+      java-version:
+        type: string
+        default: "25"
+      image-ref:
+        description: Container image to scan (must be pullable); empty = skip.
+        type: string
+        default: ""
+      upload-sarif:
+        description: "Send results to GitHub code scanning (needs security-events: write)."
+        type: boolean
+        default: true
+      tools-ref:
+        type: string
+        default: v2
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: vladpetl-dev/ci-workflows
+          ref: ${{ inputs.tools-ref }}
+          path: .ci-tools
+          persist-credentials: false
+
+      - name: Lock files
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          skip-dirs: .ci-tools
+          format: json
+          output: trivy-fs.json
+          exit-code: "0"
+          ignore-unfixed: ${{ inputs.ignore-unfixed }}
+
+      - uses: actions/setup-java@v6
+        if: inputs.gradle-directory != ''
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: corretto
+      - uses: gradle/actions/setup-gradle@v6
+        if: inputs.gradle-directory != ''
+      - name: Assemble
+        if: inputs.gradle-directory != ''
+        working-directory: ${{ inputs.gradle-directory }}
+        env:
+          GRADLE_ARGS: ${{ inputs.gradle-args }}
+        run: |
+          # The task list is intentionally word-split.
+          # shellcheck disable=SC2086
+          ./gradlew $GRADLE_ARGS -x test --no-daemon
+      - name: Jars
+        if: inputs.gradle-directory != ''
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: rootfs
+          scan-ref: ${{ inputs.gradle-directory }}/${{ inputs.jar-paths }}
+          format: json
+          output: trivy-jars.json
+          exit-code: "0"
+          ignore-unfixed: ${{ inputs.ignore-unfixed }}
+          skip-setup-trivy: true
+
+      - name: Image
+        if: inputs.image-ref != ''
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ inputs.image-ref }}
+          format: json
+          output: trivy-image.json
+          exit-code: "0"
+          ignore-unfixed: ${{ inputs.ignore-unfixed }}
+          skip-setup-trivy: true
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install ./.ci-tools
+
+      - name: Report
+        id: report
+        env:
+          FAIL_ON: ${{ inputs.fail-on }}
+        run: |
+          reports=()
+          for f in trivy-fs.json trivy-jars.json trivy-image.json; do
+            [ -f "$f" ] && reports+=(--json "$f")
+          done
+          set +e
+          python -m secgate.trivy "${reports[@]}" --fail-on "$FAIL_ON" --out trivy-report.md
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          set -e
+          cat trivy-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR
+        if: >
+          always() && steps.report.conclusion == 'success' && github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          MARKER: "<!-- trivy-gate -->"
+        run: |
+          # Each report starts with its marker line; match it as plain text, outside jq.
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '.[] | "\(.id)\t\(.body | split("\n")[0])"' \
+            | awk -F'\t' -v marker="$MARKER" '$2 == marker { id = $1 } END { print id }')
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@trivy-report.md > /dev/null
+          else
+            gh pr comment "$PR" --repo "$REPO" --body-file trivy-report.md
+          fi
+
+      - name: SARIF for code scanning
+        if: always() && inputs.upload-sarif
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          skip-dirs: .ci-tools
+          format: sarif
+          output: trivy.sarif
+          exit-code: "0"
+          ignore-unfixed: ${{ inputs.ignore-unfixed }}
+          skip-setup-trivy: true
+      - name: Upload SARIF
+        if: always() && inputs.upload-sarif && hashFiles('trivy.sarif') != ''
+        # Code scanning may be unavailable (private repo without GitHub Advanced Security): not a gate.
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: trivy-reports
+          path: |
+            trivy-*.json
+            trivy-report.md
+          if-no-files-found: ignore
+
+      - name: Gate
+        if: always() && steps.report.outputs.rc != ''
+        env:
+          RC: ${{ steps.report.outputs.rc }}
+        run: |
+          if [ "$RC" != "0" ]; then
+            echo "Blocking vulnerabilities found (see the PR comment / job summary)."
+            exit 1
+          fi

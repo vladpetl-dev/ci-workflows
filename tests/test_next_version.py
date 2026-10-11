@@ -39,3 +39,11 @@ def test_already_released(tmp_path, capsys, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert main(["--notes-out", str(tmp_path / "n.md")]) == 0
     assert capsys.readouterr().out.strip() == ""
+
+
+def test_breaking_change_bumps_major():
+    from scripts.next_version import next_version
+    assert next_version("v1.4.2", ["feat!: drop v1 inputs"]) == "v2.0.0"
+    assert next_version("v1.4.2", ["fix(ci)!: rename check"]) == "v2.0.0"
+    assert next_version("v1.4.2", ["chore: x", "BREAKING CHANGE: new threshold"]) == "v2.0.0"
+    assert next_version("v1.4.2", ["feat: add trivy"]) == "v1.5.0"
