@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ci-workflows-tools"
-version = "1.0.0"
+version = "2.0.0"
 description = "AI PR review gate, coverage gate and release tooling used by vladpetl-dev reusable workflows"
 requires-python = ">=3.10"
 dependencies = ["anthropic>=1.11,<2", "pyyaml>=6.0"]
@@ -13,7 +13,7 @@ dependencies = ["anthropic>=1.11,<2", "pyyaml>=6.0"]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["review", "scripts", "covgate"]
+packages = ["review", "scripts", "covgate", "secgate"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

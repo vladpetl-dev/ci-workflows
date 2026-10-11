@@ -126,3 +126,40 @@ def test_main_end_to_end_with_git(tmp_path):
     assert main(["--xml", str(tmp_path / "missing.xml"), "--out", str(out)]) == 1
     missing = str(tmp_path / "missing.xml")
     assert main(["--xml", missing, "--out", str(out), "--enabled", "off"]) == 0
+
+
+def test_label_gives_each_report_its_own_marker_and_title():
+    cov = parse(JACOCO)
+    d = diff_coverage(cov, {"src/main/kotlin/com/acme/Foo.kt": {3}})
+    md = render(cov, d, True, [], True, 95, 0, label="frontend")
+    assert md.startswith("<!-- coverage-gate:frontend -->")
+    assert "Coverage (frontend): PASS" in md
+    assert render(cov, d, True, [], True, 95, 0).startswith(MARKER + "\n")
+
+
+def test_default_changed_line_threshold_is_95(tmp_path):
+    repo = tmp_path / "r"
+    (repo / "src/main/kotlin/com/acme").mkdir(parents=True)
+
+    def git(*a):
+        subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    f = repo / "src/main/kotlin/com/acme/Foo.kt"
+    f.write_text("1\n2\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    git("checkout", "-qb", "pr")
+    f.write_text("1\n2\n3\n4\n5\n")
+    git("commit", "-qam", "pr")
+    xml = tmp_path / "j.xml"
+    xml.write_text(JACOCO)
+    out = tmp_path / "r.md"
+
+    main(["--xml", str(xml), "--base", "main", "--repo", str(repo), "--out", str(out),
+          "--label", "backend"])
+    text = out.read_text()
+    assert "≥ 95%" in text
+    assert text.startswith("<!-- coverage-gate:backend -->")

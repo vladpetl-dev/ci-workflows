@@ -152,13 +152,19 @@ def evaluate(cov: Coverage, diff: DiffResult | None, enabled: bool,
     return not reasons, reasons
 
 
+def marker(label: str = "") -> str:
+    """One PR comment per report: a monorepo's backend and frontend each keep their own."""
+    return f"<!-- coverage-gate:{label} -->" if label else MARKER
+
+
 def render(cov: Coverage, diff: DiffResult | None, passed: bool, reasons: list[str],
-           enabled: bool, min_diff: float, min_total: float) -> str:
+           enabled: bool, min_diff: float, min_total: float, label: str = "") -> str:
     icon = "✅" if passed else "❌"
     verdict = "PASS" if passed else "FAIL"
     if not enabled:
         verdict += " (gate off, report only)"
-    lines = [MARKER, f"## {icon} Coverage: {verdict}", ""]
+    title = f"Coverage ({label})" if label else "Coverage"
+    lines = [marker(label), f"## {icon} {title}: {verdict}", ""]
     lines += ["| Metric | Value | Required |", "|---|---|---|"]
     if diff is not None:
         lines.append(f"| Changed lines | {_fmt(_pct(diff.covered, diff.coverable))} "
@@ -198,15 +204,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--repo", default=".")
     parser.add_argument("--enabled", default="true", help="false = report only, never fail")
-    parser.add_argument("--min-diff", type=float, default=90.0)
+    parser.add_argument("--min-diff", type=float, default=95.0)
     parser.add_argument("--min-total", type=float, default=0.0)
     parser.add_argument("--out", default="coverage-report.md")
+    parser.add_argument("--label", default="", help="report name, e.g. backend or frontend")
     args = parser.parse_args(argv)
 
     enabled = _bool(args.enabled)
     xml_path = Path(args.xml)
     if not xml_path.exists():
-        msg = f"{MARKER}\n## {'❌' if enabled else '⚠️'} Coverage: report missing (`{args.xml}`)\n"
+        title = f"Coverage ({args.label})" if args.label else "Coverage"
+        icon = "❌" if enabled else "⚠️"
+        msg = f"{marker(args.label)}\n## {icon} {title}: report missing (`{args.xml}`)\n"
         Path(args.out).write_text(msg)
         print(f"coverage report missing: {args.xml}")
         return 1 if enabled else 0
@@ -216,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.base:
         diff = diff_coverage(cov, changed_lines(_git_diff(args.base, args.head, args.repo)))
     passed, reasons = evaluate(cov, diff, enabled, args.min_diff, args.min_total)
-    md = render(cov, diff, passed, reasons, enabled, args.min_diff, args.min_total)
+    md = render(cov, diff, passed, reasons, enabled, args.min_diff, args.min_total, args.label)
     Path(args.out).write_text(md)
     print(("PASS" if passed else "FAIL") + (": " + "; ".join(reasons) if reasons else ""))
     return 0 if passed else 1
