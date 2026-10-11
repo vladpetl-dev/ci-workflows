@@ -1,0 +1,87 @@
+name: pr-size
+
+# PR size gate: added lines of code against a limit. Deleted lines and files, unchanged renames,
+# blank lines and comment-only lines do not count; docs, lock files and wrappers are excluded.
+# Over the limit the check fails, so a ruleset blocks the merge. `enabled: false` = report only.
+
+on:
+  workflow_call:
+    inputs:
+      enabled:
+        description: true = fail over the limit; false = report only.
+        type: boolean
+        default: true
+      max-lines:
+        description: Maximum added lines of code per pull request.
+        type: number
+        default: 1500
+      exclude:
+        description: Extra fnmatch patterns (whitespace-separated) that do not count, on top of the defaults.
+        type: string
+        default: ""
+      tools-ref:
+        type: string
+        default: v2
+
+jobs:
+  size:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: vladpetl-dev/ci-workflows
+          ref: ${{ inputs.tools-ref }}
+          path: .ci-tools
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install ./.ci-tools
+
+      - name: Count
+        id: count
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          MAX: ${{ inputs.max-lines }}
+          ENABLED: ${{ inputs.enabled }}
+          EXCLUDE: ${{ inputs.exclude }}
+        run: |
+          set +e
+          python -m sizegate.size --base "origin/$BASE_REF" --max "$MAX" --enabled "$ENABLED" \
+            --exclude "$EXCLUDE .ci-tools/*" --out pr-size.md
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          set -e
+          cat pr-size.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR
+        if: always() && steps.count.conclusion == 'success' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          MARKER: "<!-- pr-size-gate -->"
+        run: |
+          # Each report starts with its marker line; match it as plain text, outside jq.
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '.[] | "\(.id)\t\(.body | split("\n")[0])"' \
+            | awk -F'\t' -v marker="$MARKER" '$2 == marker { id = $1 } END { print id }')
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@pr-size.md > /dev/null
+          else
+            gh pr comment "$PR" --repo "$REPO" --body-file pr-size.md
+          fi
+
+      - name: Gate
+        if: always() && steps.count.outputs.rc != ''
+        env:
+          RC: ${{ steps.count.outputs.rc }}
+        run: |
+          if [ "$RC" != "0" ]; then
+            echo "The pull request adds more code than the limit (see the PR comment / job summary)."
+            exit 1
+          fi

@@ -72,11 +72,17 @@ def changed_lines(diff: str) -> dict[str, set[int]]:
     """Added or modified lines per file in the new version, from a -U0 unified diff."""
     out: dict[str, set[int]] = {}
     current = None
+    in_header = False  # between `diff --git` and the first hunk; only there is `+++` a file header
     for line in diff.splitlines():
-        if line.startswith("+++ "):
+        if line.startswith("diff --git "):
+            in_header, current = True, None
+            continue
+        if in_header and line.startswith("+++ "):
             target = line[4:].strip()
             current = None if target == "/dev/null" else re.sub(r"^b/", "", target)
             continue
+        if line.startswith("@@"):
+            in_header = False
         m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
         if m and current:
             start, count = int(m.group(1)), int(m.group(2) or "1")
