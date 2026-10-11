@@ -61,10 +61,17 @@ def _excluded(path: str, patterns: list[str]) -> bool:
 def count(diff: str, exclude: list[str]) -> SizeResult:
     result = SizeResult()
     current = None
+    in_header = False  # between `diff --git` and the first hunk; only there is `+++` a file header
     for line in diff.splitlines():
-        if line.startswith("+++ "):
-            target = line[4:].strip()
-            current = None if target == "/dev/null" else re.sub(r"^b/", "", target)
+        if line.startswith("diff --git "):
+            in_header, current = True, None
+            continue
+        if in_header:
+            if line.startswith("+++ "):
+                target = line[4:].strip()
+                current = None if target == "/dev/null" else re.sub(r"^b/", "", target)
+            elif line.startswith("@@"):
+                in_header = False
             continue
         if not line.startswith("+") or current is None:
             continue

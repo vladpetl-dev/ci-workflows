@@ -104,3 +104,17 @@ def test_deleting_a_whole_class_costs_nothing(tmp_path):
 
     assert main(["--base", "main", "--repo", str(repo), "--max", "0", "--out", str(out)]) == 0
     assert "0 lines" in out.read_text()
+
+
+def test_added_lines_that_look_like_file_headers_stay_in_their_file():
+    diff = """diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -0,0 +1,3 @@
++val a = 1
++++ README.md
++val b = 2
+"""
+    result = count(diff, ["*.md"])
+    assert result.per_file == {"src/A.kt": 3}
+    assert result.counted == 3

@@ -163,3 +163,17 @@ def test_default_changed_line_threshold_is_95(tmp_path):
     text = out.read_text()
     assert "≥ 95%" in text
     assert text.startswith("<!-- coverage-gate:backend -->")
+
+
+def test_changed_lines_ignore_content_that_looks_like_a_header():
+    diff = """diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -0,0 +1,3 @@
++val a = 1
++++ other.kt
++val b = 2
+@@ -9,0 +10,1 @@
++val c = 3
+"""
+    assert changed_lines(diff) == {"src/A.kt": {1, 2, 3, 10}}
