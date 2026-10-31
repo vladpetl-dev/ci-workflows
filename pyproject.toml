@@ -13,7 +13,7 @@ dependencies = ["anthropic>=1.11,<2", "pyyaml>=6.0"]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["review", "scripts", "covgate", "secgate", "sizegate"]
+packages = ["review", "scripts", "covgate", "secgate", "sizegate", "imagemirror"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
