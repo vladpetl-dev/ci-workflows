@@ -45,6 +45,17 @@ on:
         description: Name of this report in the PR comment (one comment per label).
         type: string
         default: backend
+      container-images:
+        description: >
+          Docker Hub images the tests need (Testcontainers), one per line or space-separated, with pinned
+          tags, e.g. "postgres:18 testcontainers/ryuk:0.14.0". Pulled before the build from image-mirror
+          (falling back to Docker Hub) and tagged with these names, so the tests find them locally. Empty = none.
+        type: string
+        default: ""
+      image-mirror:
+        description: Registry path holding copies of container-images (see images.txt); "" = Docker Hub only.
+        type: string
+        default: ghcr.io/vladpetl-dev/mirror
       tools-ref:
         description: Ref of vladpetl-dev/ci-workflows for the Python tooling. Keep equal to the @ref you call.
         type: string
@@ -69,6 +80,34 @@ jobs:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
       - uses: gradle/actions/setup-gradle@v6
+
+      - name: Pull container images
+        if: inputs.container-images != ''
+        env:
+          IMAGES: ${{ inputs.container-images }}
+          MIRROR: ${{ inputs.image-mirror }}
+        run: |
+          set -uo pipefail
+          plan=$(printf '%s' "$IMAGES" | (cd .ci-tools && python3 -m imagemirror pull-plan --mirror "$MIRROR")) || exit 1
+          pull() {
+            for attempt in 1 2 3; do
+              timeout 300 docker pull -q "$1" && return 0
+              echo "::warning::pull of $1 failed (attempt $attempt)"
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+          while IFS=$'\t' read -r image mirrored; do
+            if [ -n "$mirrored" ] && pull "$mirrored"; then
+              docker tag "$mirrored" "$image"
+              echo "$image ← $mirrored"
+            elif pull "$image"; then
+              echo "::warning::$image came from Docker Hub, not the mirror"
+            else
+              echo "::error::Could not pull $image (mirror: ${mirrored:-none}, then Docker Hub)"
+              exit 1
+            fi
+          done <<< "$plan"
 
       - name: Build and test
         id: build

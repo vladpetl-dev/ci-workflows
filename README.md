@@ -161,6 +161,32 @@ The shared preset (`default.json`):
 
 Renovate runs as the GitHub App installed on the organization.
 
+## Container image mirror
+
+Tests that start containers (Testcontainers) pull images at run time. Docker Hub limits anonymous pulls per
+IP (GitHub runners share IPs), and its public ECR copy can hang for minutes, failing whole builds. So the
+images live in our own registry on GitHub's network:
+
+- `images.txt` is the catalogue: Docker Hub names with pinned tags (`postgres:18`,
+  `testcontainers/ryuk:0.14.0`). Add a line in a PR to mirror a new image.
+- `mirror-images.yml` copies every image, all platforms, to `ghcr.io/vladpetl-dev/mirror/<name>:<tag>`
+  (from Docker Hub, falling back to `public.ecr.aws` for official images). It runs when the catalogue
+  changes, weekly (so moving tags such as `postgres:18` get patch releases) and by hand. The mirror
+  packages are public: GHCR storage and transfer are free, and anyone can pull without a token.
+- A repository lists what its tests need:
+
+  ```yaml
+  backend:
+    uses: vladpetl-dev/ci-workflows/.github/workflows/ci-gradle.yml@v2
+    with:
+      container-images: postgres:18 testcontainers/ryuk:0.14.0
+  ```
+
+  Before the build each image is pulled from the mirror (three tries), else from Docker Hub, and tagged
+  with its Docker Hub name, so tests keep plain names (`postgres:18`) and run unchanged on a laptop. An
+  image missing from both fails the step at once, with its name, instead of a timeout deep in the tests.
+- An image that is not in `images.txt` comes from Docker Hub, with a warning in the log.
+
 ## Branch protection
 
 A failed check blocks a merge only when the branch requires it. After the workflows above have run once (so
@@ -199,6 +225,8 @@ Organization secrets shared with selected repositories (passed with `secrets: in
 | `ci-gradle`, `ci-node` | `coverage-gate` | `true` | `false` = report only |
 | `ci-gradle`, `ci-node` | `min-changed-coverage` | `95` | Line coverage of PR-changed lines, %; `0` = off |
 | `ci-gradle`, `ci-node` | `min-total-coverage` | `0` | Total line coverage, %; `0` = off |
+| `ci-gradle` | `container-images` | `""` | Docker Hub images the tests need (Testcontainers), pinned tags; pulled before the build, see [Container image mirror](#container-image-mirror) |
+| `ci-gradle` | `image-mirror` | `ghcr.io/vladpetl-dev/mirror` | Where the copies of `container-images` live; `""` = Docker Hub only |
 | `ci-gradle` | `coverage-xml` | `build/reports/jacoco/test/jacocoTestReport.xml` | Relative to `working-directory`; JaCoCo or Cobertura |
 | `ci-gradle`, `ci-node` | `report-label` | `backend` / `frontend` | One PR comment per label |
 | `ci-node` | `working-directory` | `frontend` | |
@@ -248,7 +276,8 @@ Releases are tagged `vX.Y.Z`; the moving tags `v1` and `v2` point at the latest 
   - labelled coverage reports;
   - `ci-node`, `security` (Trivy) and the generic `release`;
   - adversarial review prompt;
-  - action versions updated.
+  - action versions updated;
+  - v2.3: `container-images` and `image-mirror` in `ci-gradle` (container image mirror).
 - `v1` stays available, unchanged.
 
 ## Development

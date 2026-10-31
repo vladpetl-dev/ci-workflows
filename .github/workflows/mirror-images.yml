@@ -1,0 +1,67 @@
+name: mirror-images
+
+# Copies every image in images.txt from Docker Hub (or its public ECR copy) to ghcr.io/vladpetl-dev/mirror,
+# all platforms, registry to registry. CI then pulls from the mirror (ci-gradle `container-images`), which
+# sits on GitHub's own network, so a slow Docker Hub or ECR no longer breaks builds. Runs when the catalogue
+# changes, weekly (moving tags such as postgres:18 get their patch releases), and by hand.
+
+on:
+  push:
+    branches: [main]
+    paths: [images.txt, imagemirror/**, .github/workflows/mirror-images.yml]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: mirror-images
+  cancel-in-progress: false
+
+env:
+  MIRROR: ghcr.io/vladpetl-dev/mirror
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Log in to GHCR
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+      - name: Copy images
+        run: |
+          set -uo pipefail
+          plan=$(python -m imagemirror copy-plan images.txt --mirror "$MIRROR") || exit 1
+          failed=()
+          while IFS=$'\t' read -r target sources; do
+            copied=""
+            for source in $sources; do
+              for attempt in 1 2 3; do
+                if timeout 600 docker buildx imagetools create --tag "$target" "$source"; then
+                  copied="$source"; break 2
+                fi
+                echo "::warning::$source → $target failed (attempt $attempt)"
+                sleep $((attempt * 15))
+              done
+            done
+            if [ -n "$copied" ]; then
+              echo "| \`$target\` | \`$copied\` |" >> "$RUNNER_TEMP/copied.md"
+            else
+              echo "::error::Could not copy $target from any source: $sources"
+              failed+=("$target")
+            fi
+          done <<< "$plan"
+          { echo "| Mirror | Copied from |"; echo "|---|---|"; cat "$RUNNER_TEMP/copied.md" 2>/dev/null; } >> "$GITHUB_STEP_SUMMARY"
+          [ ${#failed[@]} -eq 0 ]

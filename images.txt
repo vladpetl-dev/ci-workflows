@@ -1,0 +1,4 @@
+# Images copied to ghcr.io/vladpetl-dev/mirror by .github/workflows/mirror-images.yml (weekly and on change).
+# Docker Hub names, one per line, always with a pinned tag. CI pulls them with ci-gradle's `container-images`.
+postgres:18
+testcontainers/ryuk:0.14.0   # Testcontainers 2.0.x reaper
