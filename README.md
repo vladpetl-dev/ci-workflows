@@ -168,7 +168,10 @@ IP (GitHub runners share IPs), and its public ECR copy can hang for minutes, fai
 images live in our own registry on GitHub's network:
 
 - `images.txt` is the catalogue: Docker Hub names with pinned tags (`postgres:18`,
-  `testcontainers/ryuk:0.14.0`). Add a line in a PR to mirror a new image.
+  `testcontainers/ryuk:0.14.0`). Add a line in a PR to mirror a new image. A new image's package is
+  created private: after its first mirror run, an organisation owner opens
+  `https://github.com/orgs/vladpetl-dev/packages/container/mirror%2F<name>/settings` and sets
+  Change visibility → Public (the organisation allows public packages under Settings → Packages).
 - `mirror-images.yml` copies every image, all platforms, to `ghcr.io/vladpetl-dev/mirror/<name>:<tag>`
   (from Docker Hub, falling back to `public.ecr.aws` for official images). It runs when the catalogue
   changes, weekly (so moving tags such as `postgres:18` get patch releases) and by hand. The mirror
